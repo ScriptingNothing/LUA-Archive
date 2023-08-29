@@ -1,0 +1,503 @@
+local errorBin = Workspace:WaitForChild('ErrorOut')
+local function ErrorOut(str)
+	local msg = Instance.new('StringValue')
+	msg.Value = str
+	msg.Parent = errorBin
+end
+
+local INTRO_ZOOM_TIME = 2
+local OUTRO_ZOOM_TIME = 3
+
+local SPIN_SPEED = math.pi*2/100 -- (rad/sec)
+local SPIN_ZOOM_LEVEL = 400
+local CHARACTER_ZOOM_LEVEL = 10
+
+local DebrisService = Game:GetService('Debris')
+
+-- Player and playing
+local Player = script.Parent.Parent
+
+-- Player camera state for use by the tutorial
+local CameraData = Player:WaitForChild('CameraData')
+local PlayingValue = Player:WaitForChild('Playing_ReadOnly')
+local LevelSpinCamTheta = CameraData:WaitForChild('LevelSpinCamTheta')
+local LastFreeCameraCFrame = CameraData:WaitForChild('LastFreeCameraCFrame')
+local LastFreeCameraFocus = CameraData:WaitForChild('LastFreeCameraFocus')
+local LastWasSpinIntroing = CameraData:WaitForChild('LastWasSpinIntroing')
+local MyLastWasSpinning = LastWasSpinIntroing.Value
+
+local TutorialRunning = false
+
+-- Inventory is open?
+local InvOpenState = Player:WaitForChild('otherstats'):WaitForChild('InventoryOpen')
+
+-- Do nothing on the first run
+local FirstRun = CameraData:FindFirstChild('FirstRunComplete')
+local IsFirstRun = false
+if not FirstRun then
+	IsFirstRun = true
+	FirstRun = Instance.new('IntValue', CameraData)
+	FirstRun.Name = 'FirstRunComplete'
+end
+
+-- Camera
+local Camera = Workspace.CurrentCamera
+
+-- Server Camera Manager, used when the player is Playing
+local CameraManager = Workspace:WaitForChild('CameraManager')
+local CameraModeValue = CameraManager:WaitForChild('CameraMode')
+
+-- Last camera mode tracking
+local CurrentCameraMode = CameraModeValue.Value
+local LastCameraMode = CameraModeValue.Value
+CameraModeValue.Changed:connect(function()
+	--print("::ModeChange")
+	LastCameraMode = CurrentCameraMode
+	CurrentCameraMode = CameraModeValue.Value
+	--
+	if CurrentCameraMode == 'Outro' then
+		if PlayingValue.Value then
+			DoOutroCam()
+		end
+	elseif CurrentCameraMode == 'Idle' then
+		if PlayingValue.Value then
+			DoResetCam()
+		end
+	end
+end)
+
+-- Tracking of the current game type
+local CurrentGameTypeModel = 
+	Workspace:WaitForChild('MainGameScript'):WaitForChild('CurrentGameType')
+local CurrentGameType = 'Lobby'
+for _, item in pairs(CurrentGameTypeModel:GetChildren()) do
+	CurrentGameType = item.Name
+end
+CurrentGameTypeModel.ChildAdded:connect(function(ch)
+	--print("::GameTypeChange")
+	-- New round started
+	CurrentGameType = ch.Name
+	if PlayingValue.Value then
+		DoIntroCam()
+	end
+end)
+
+-- Level model
+
+-- Playing Value
+PlayingValue.Changed:connect(function()
+	if PlayingValue.Value then
+		if CurrentCameraMode == 'Outro' then
+			DoOutroCam()
+		elseif CurrentCameraMode == 'Idle' then
+			DoIntroCam()
+		end
+	end
+end)
+
+-- Inv open state
+InvOpenState.Changed:connect(function()
+	if not InvOpenState.Value and not PlayingValue.Value then
+		-- give back custom control from a viewing of the inventory
+		if Player.Character and Player.Character:FindFirstChild('Humanoid') then
+			Camera.CameraSubject = Player.Character.Humanoid	
+			Camera.CameraType = 'Custom'	
+		end
+	end
+end)
+
+
+-- Requirements
+-- IF PLAYING
+--   Intro Cam on spawned if the mode is currently "Idle"
+--   On died, track the killer if there is a tag, and the game type is not rocketrace
+--   Outro Cam on mode changed to "Outro"
+-- IF NOT PLAYING
+-- 
+
+local ControlType = 'FocusCharacter' -- FocusCharacter / FocusOtherCharacter / FocusCustom
+local OtherCharacterFocus = nil
+local GlobalDesiredCoordinateFrame = CFrame.new()
+local GlobalDesiredFocus = CFrame.new()
+
+local FIRST_RUN_HUGE_HACK = false
+
+function SetControlCharacter()
+	ControlType = 'FocusCharacter'
+end
+function SetControlOtherCharacter(ch)
+	ControlType = 'FocusOtherCharacter'
+	OtherCharacterFocus = ch
+end
+function SetControlCustom(cf, focus)
+	ControlType = 'FocusCustom'
+	GlobalDesiredCoordinateFrame = cf
+	GlobalDesiredFocus = focus
+end
+function DoUpdateControl()
+	-- No update while in inv or when not playing
+	if InvOpenState.Value then 
+		return	
+	end
+
+	-- Our control types
+	if ControlType == 'FocusCharacter' then
+		Camera.CameraType = 'Custom'
+		if Player.Character and Player.Character:FindFirstChild('Humanoid') then
+			Camera.CameraSubject = Player.Character.Humanoid
+		end
+		if Player.Character and PlayingValue.Value then
+			if Camera.CameraSubject ~= Player.Character:FindFirstChild('Humanoid') or Camera.CameraType ~= Enum.CameraType.Custom then
+				Camera.CameraSubject = Player.Character:FindFirstChild('Humanoid')
+				if Player.Character:FindFirstChild('Head') then
+					local headCF = Player.Character.Head.CFrame
+					Camera.CoordinateFrame = headCF * CFrame.Angles(-0.25, 0, 0) * CFrame.new(0, 0, CHARACTER_ZOOM_LEVEL)
+				end
+			end
+		end
+	elseif ControlType == 'FocusOtherCharacter' then
+		if Camera.CameraSubject ~= OtherCharacterFocus:FindFirstChild('Humanoid') or Camera.CameraType ~= Enum.CameraType.Custom then
+			Camera.CameraSubject = OtherCharacterFocus:FindFirstChild('Humanoid')
+			if OtherCharacterFocus:FindFirstChild('Head') then
+				local headCF = OtherCharacterFocus.Head.CFrame
+				Camera.CoordinateFrame = headCF * CFrame.Angles(-0.25, 0, 0) * CFrame.new(0, 0, CHARACTER_ZOOM_LEVEL)				
+			end
+			Camera.CameraType = 'Custom'
+		end
+	elseif ControlType == 'FocusCustom' then
+		Camera.CameraType = 'Scriptable'
+		Camera.CoordinateFrame = GlobalDesiredCoordinateFrame
+		Camera.Focus = GlobalDesiredFocus
+	end
+	-- Updated
+	LastFreeCameraCFrame.Value = Camera.CoordinateFrame
+	LastFreeCameraFocus.Value = Camera.Focus	
+end
+Spawn(function()
+	while true do
+		if not TutorialRunning then
+			DoUpdateControl()
+		end
+		wait()
+	end
+end)
+
+-------------------
+
+function DoHalt()
+	if not PlayingValue.Value then
+		SetControlCharacter()
+	end
+	return not PlayingValue.Value
+end
+  
+
+function Freeze(basePart)
+	local bodyPosition = Instance.new('BodyPosition')
+	bodyPosition.maxForce = Vector3.new(1e9, 0, 1e9)
+	bodyPosition.position = basePart.Position
+	--bodyPosition.Parent = basePart
+	local bodyGyro = Instance.new('BodyGyro')
+	bodyGyro.maxTorque = Vector3.new(1e9, 1e9, 1e9)
+	bodyGyro.cframe = CFrame.new(Vector3.new(), basePart.CFrame.lookVector)
+	bodyGyro.Parent = basePart
+	return bodyPosition, bodyGyro
+end
+
+
+local acos = math.acos
+local min  = math.min
+local sin  = math.sin
+local sqrt = math.sqrt
+local function Slerp(t, a, b)
+	local om = acos(min(1, a:Dot(b)))
+	if om < 0.01 then
+		return (1-t)*a +
+		          t *b
+	else
+		return (sin((1-t)*om) / sin(om))*a +
+		       (sin(   t *om) / sin(om))*b
+	end
+end
+
+local function SlerpMod(t, a, b)
+	local mid = ((a+b)/2).unit
+	if t >= 0.5 then
+		return Slerp(t*2-1, mid, b)
+	else
+		return Slerp(t*2, a, mid)
+	end
+end
+
+local function root2_curve(n) --S shaped with a vertical tangent as x -> .5
+	if n < 0.5 then
+		return 0.5-sqrt(0.5^2 - n^2)
+	else
+		return sqrt(0.5^2 - (1-n)^2)+0.5
+	end
+end
+
+local function quad_curve(n) --slightly S shaped curve, with tangent -> 2 as x -> 0.5
+	if n < 0.5 then
+		return n*n + 0.5*n
+	else
+		return -n*n +2.5*n -0.5
+	end
+end
+
+local function sin4_smallbias_curve(n) --Like quad_curve but biased to smaller outputs
+	return sin((0.5*3.141592653)*n)^4
+end
+
+
+-- Waits for a new character to be added if the current one is invalid
+-- (Ensures that you don't have the old dead character after a respawn)
+local function WaitForValidCharacter(player)
+	local character = player.Character
+	if character and character.Parent then 
+		character:WaitForChild('Humanoid')
+	end
+	if not character or not character.Parent or character.Humanoid.Health <= 0 then
+		player.CharacterAdded:wait()
+		character = player.Character
+	end
+	return character
+end
+
+
+-- Zoom the camera out and circle around the map, and then zoom it in to 
+-- where the character is once the character loads.
+function DoIntroCam()	
+	if DoHalt() then return end
+	-- spin the camera around the focus until the character and head
+	-- arrive so that we have a position to intro into.
+	local lastTime = Workspace.DistributedGameTime
+	local didSpin = false
+	while not (Player.Character and Player.Character.Parent) or (Workspace.DistributedGameTime - MyLastWasSpinning) < 1 do
+		didSpin = true
+		--
+		local thisTime = Workspace.DistributedGameTime
+		local dt = (thisTime-lastTime)
+		lastTime = thisTime
+		--
+		LastWasSpinIntroing.Value = thisTime
+		--
+		LevelSpinCamTheta.Value = LevelSpinCamTheta.Value + dt*SPIN_SPEED
+		local theta = LevelSpinCamTheta.Value
+		--
+		SetControlCustom(CFrame.new(0,0,0) * CFrame.Angles(0, theta, 0) *
+		                  CFrame.Angles(-0.6, 0, 0) * CFrame.new(0, 0, SPIN_ZOOM_LEVEL),
+		                  CFrame.new(0,0,0))
+		--
+		wait()
+		if DoHalt() then return end
+	end
+	-- do tween to character
+	WaitForValidCharacter(Player)
+	local head = Player.Character:WaitForChild('Head')
+	local torso = Player.Character:WaitForChild('Torso')
+	if DoHalt() then return end
+	local initialDir = torso.CFrame.lookVector
+	local updateDir = true
+	local freezePosition, freezeGyro = Freeze(torso)
+	Spawn(function()
+		while updateDir do
+			local theta = math.acos(math.max(-1, math.min(1, initialDir:Dot(torso.CFrame.lookVector))))
+			if theta > math.pi/20 then
+				freezeGyro.cframe = torso.CFrame	
+			end
+			wait()
+		end
+	end)	
+	--
+	local oldCamCoord = LastFreeCameraCFrame.Value
+	local oldCamFocus = LastFreeCameraFocus.Value	
+	local startTime = tick()
+	local lastTime = startTime
+	--
+	while (tick()-startTime) < INTRO_ZOOM_TIME do
+		local thisTime = tick()
+		local t = math.min((thisTime-startTime)/INTRO_ZOOM_TIME, 1)
+		local dt = thisTime-lastTime
+		lastTime = thisTime
+		--
+		t = sin4_smallbias_curve(t) -- smooth out the ends of the transition
+		--
+		local desiredCamAt = head.CFrame * CFrame.Angles(-0.25, 0, 0) * CFrame.new(0, 0, CHARACTER_ZOOM_LEVEL)
+		local pos, dir;	
+		if didSpin then
+			LevelSpinCamTheta.Value = LevelSpinCamTheta.Value + dt*SPIN_SPEED
+			--
+			local spinCamAt = CFrame.new(0,0,0) * CFrame.Angles(0, LevelSpinCamTheta.Value, 0) * 
+			                  CFrame.Angles(-0.6, 0, 0) * CFrame.new(0, 0, SPIN_ZOOM_LEVEL)
+			pos = spinCamAt.p:Lerp(desiredCamAt.p, t)
+			dir = SlerpMod(t, spinCamAt.lookVector, desiredCamAt.lookVector)
+		else
+			pos = oldCamCoord.p:Lerp(desiredCamAt.p, t)
+			dir = SlerpMod(t, oldCamCoord.lookVector, desiredCamAt.lookVector)
+		end
+		SetControlCustom(CFrame.new(pos, pos + dir*2), CFrame.new(pos + dir*2))
+		wait()
+		if DoHalt() then return end
+	end
+
+	SetControlCharacter()
+	
+	-- unfreeze
+	updateDir = false
+	freezePosition:Destroy()
+	freezeGyro:Destroy()
+	
+	-- set the camera back to the character
+	DoResetCam()
+end
+
+
+-- Zoom the camera out and circle around the map
+function DoOutroCam()
+	if DoHalt() then return end
+	-- Record where we were
+	local startCoord = Camera.CoordinateFrame
+	local startFocus = Camera.Focus	
+	
+	-- Tween the cam out to the starting point
+	local startTime = tick()
+	local lastTime = startTime
+	while (tick()-startTime) < OUTRO_ZOOM_TIME do
+		if CurrentCameraMode ~= 'Outro' then break end
+		local thisTime = tick()
+		local t = math.min((thisTime-startTime)/OUTRO_ZOOM_TIME, 1)
+		local dt = thisTime-lastTime
+		lastTime = thisTime
+		--
+		t = sin4_smallbias_curve(t) -- smooth out the ends of the transition
+		--
+		LevelSpinCamTheta.Value = LevelSpinCamTheta.Value + dt*SPIN_SPEED
+		--
+		local desiredCamAt = CFrame.new(0,0,0) * CFrame.Angles(0, LevelSpinCamTheta.Value, 0) * 
+			                 CFrame.Angles(-0.6, 0, 0) * CFrame.new(0, 0, SPIN_ZOOM_LEVEL)
+		local pos = startCoord.p:Lerp(desiredCamAt.p, t)
+		local dir = SlerpMod(t, startCoord.lookVector, desiredCamAt.lookVector)
+		--
+		SetControlCustom(CFrame.new(pos, pos+dir), CFrame.new(pos + dir))
+		--
+		wait()
+		if DoHalt() then return end
+	end
+	
+	-- Spin the camera around the level until the camera mode isn't Outro
+	local lastTime = Workspace.DistributedGameTime
+	while CurrentCameraMode == 'Outro' do
+		local thisTime = Workspace.DistributedGameTime
+		local dt = (thisTime-lastTime)
+		lastTime = thisTime
+		--
+		LevelSpinCamTheta.Value = LevelSpinCamTheta.Value + dt*SPIN_SPEED
+		local theta = LevelSpinCamTheta.Value
+		--
+		SetControlCustom(CFrame.new(0,0,0) * CFrame.Angles(0, theta, 0) *
+		                  CFrame.Angles(-0.6, 0, 0) * CFrame.new(0, 0, SPIN_ZOOM_LEVEL),
+		                  CFrame.new(0,0,0))
+		--
+		wait()
+		if DoHalt() then return end
+	end
+	
+	-- Reset the cam
+	DoResetCam()	
+end
+
+
+-- Display a kill-cam focusing on a given killer
+function DoKillCam(killer)
+	-- need to be in idle mode to do the kill cam
+	if CurrentCameraMode ~= 'Idle' then return end
+
+	local function focusOnKiller()		
+		-- Wait for a humanoid
+		local hum = killer.Character:WaitForChild('Humanoid')	
+		
+		-- Wait a sec
+		wait(0.5)
+		if DoHalt() then return end
+		if not killer.Character or hum.Health <= 0 then return end -- killed again right away	
+		
+		-- Kill cam, change the subject to a player and track them
+		SetControlOtherCharacter(killer.Character)
+	end
+	
+	-- focus whenever the killer spawns
+	killer.CharacterAdded:connect(focusOnKiller)
+	if killer.Character then
+		Spawn(focusOnKiller)
+	end
+end
+
+
+-- Reset the camera to working for our humanoid
+function DoResetCam()
+	SetControlCharacter()
+end
+
+
+-- Put into a good state
+SetControlCharacter()
+
+
+-- Do an initial intro cam
+if PlayingValue.Value then
+	if CurrentCameraMode == 'Outro' then
+		DoOutroCam()
+	elseif CurrentCameraMode == 'Idle' then
+		DoIntroCam()
+	end
+end
+
+
+-- Hook up kill-cam
+while not Player.Character do Player.Changed:wait() end
+local hum = Player.Character:WaitForChild('Humanoid')
+hum.Died:connect(function()
+	-- Wait for a tag (WONT leak threads, as this event should only
+	-- be firing once per instance of this script.
+	local tag = hum:WaitForChild('creator')
+	while not hum.creator.Value do hum.creator.Changed:wait() end
+	if hum.creator.Value:IsA('Player') then
+		local killer = hum.creator.Value
+		wait(0.5)
+		DoKillCam(killer)
+	end
+end)
+
+
+
+-- Listen to tutorial camera script signals
+script.ChildAdded:connect(function(child)
+	if child:IsA('BoolValue') and child.Name == 'CameraManSignal' then
+		TutorialRunning = child.Value
+		DebrisService:AddItem(child, 0)
+	end
+end)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
