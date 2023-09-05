@@ -1,0 +1,90 @@
+-- SERVER SCRIPT 
+
+local tool = script.Parent
+
+local Config = tool:WaitForChild('Configuration')
+
+local shootdistance = Config:WaitForChild('ShootDistance').Value
+local damage = Config:WaitForChild('Damage').Value
+
+local gunshot = tool:WaitForChild('Gun Shot')
+
+tool.Fired.OnServerEvent:Connect(function(plr,m,chr)
+	
+	
+	local ray = Ray.new(tool.Barrel.CFrame.Position, (m - tool.Barrel.Position).Unit*shootdistance)
+
+	local hit, position = game.Workspace:FindPartOnRay(ray, chr)
+	
+	gunshot:Play()
+	
+	if hit then
+		local hum = hit.Parent:FindFirstChild('Humanoid')
+		if hum then
+			hum.Health -=  damage
+		end
+	end
+
+	local distance = (position - tool.Barrel.Position).Magnitude
+	
+	local rayPart = Instance.new("Part", chr)
+	rayPart.Name          = "RayPart"
+	rayPart.BrickColor    = BrickColor.new("White")
+	rayPart.Material	  = "SmoothPlastic"
+	rayPart.Transparency  = 0.5
+	rayPart.Anchored      = true
+	rayPart.CanCollide    = false
+	rayPart.TopSurface    = Enum.SurfaceType.Smooth
+	rayPart.BottomSurface = Enum.SurfaceType.Smooth
+	rayPart.formFactor    = Enum.FormFactor.Custom
+	rayPart.Size          = Vector3.new(0.2, 0.2, distance)
+	rayPart.CFrame        = CFrame.new(position, tool.Barrel.CFrame.p) * CFrame.new(0, 0, -distance/2)
+
+	game:GetService('Debris'):AddItem(rayPart, 0.02)
+end)
+
+
+
+-- LOCAL SCRIPT
+
+
+
+local tool = script.Parent
+
+local plr = game:GetService('Players').LocalPlayer or game.Players.PlayerAdded:Wait()
+local chr = plr.Character or plr.CharacterAdded:Wait()
+local hum = chr:WaitForChild('Humanoid')
+local m = plr:GetMouse()
+
+local active = false
+local waitime = 0.1
+
+local event = tool:WaitForChild('Fired')
+
+m.Button1Down:Connect(function()
+	if chr:FindFirstChild(tool.Name) then
+		active = true
+		while active == true do
+			local org_of  = hum.CameraOffset
+
+			for i = 1,5 do
+				local a = math.random(-100,100)/100
+				local b = math.random(-100,100)/100
+				local c = math.random(-100,100)/100
+				hum.CameraOffset = Vector3.new(a,b,c)
+				wait()
+				if i==5 then
+					hum.CameraOffset = org_of
+				end
+			end
+			
+			print('erer')
+			event:FireServer(m.Hit.Position,chr)
+			task.wait(waitime)
+		end
+	end
+end)
+m.Button1Up:Connect(function()
+	active = false
+end)
+
