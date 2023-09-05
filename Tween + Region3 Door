@@ -1,0 +1,45 @@
+local RunService = game:GetService('RunService');
+local TweenService = game:GetService('TweenService');
+
+local IgnoreTable = {workspace.Baseplate};
+
+local Model = script.Parent;
+local Hitbox = Model:WaitForChild('Hitbox',60);
+local Door = Model:WaitForChild('Door',60);
+
+local DoorOpenPosition = Door:WaitForChild('Open').CFrame;
+local DoorClosePosition = Door:WaitForChild('Close').CFrame;
+
+task.wait(0.0);
+
+Door:ClearAllChildren();
+
+local Region = Region3.new(Hitbox.Position - (Hitbox.Size / 2), Hitbox.Position + (Hitbox.Size / 2))
+
+local InRegionParts;
+local DoorIsOpen = false;
+
+for _, Part in pairs(Model:GetDescendants()) do
+	if Part then
+		table.insert(IgnoreTable, Part)
+	end
+end
+
+local DoorStateChangeFunction = function(State)
+	if State == 1 and not DoorIsOpen then
+		DoorIsOpen = true
+		TweenService:Create(Door, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {CFrame = DoorOpenPosition}):Play()
+	elseif State == 2 and DoorIsOpen then
+		DoorIsOpen = false
+		TweenService:Create(Door, TweenInfo.new(0.5, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {CFrame = DoorClosePosition}):Play()
+	end
+end
+
+RunService.Heartbeat:Connect(function(deltaTime)
+	InRegionParts = workspace:FindPartsInRegion3WithIgnoreList(Region ,IgnoreTable)
+	if #InRegionParts > 0 then
+		DoorStateChangeFunction(1)
+	else
+		DoorStateChangeFunction(2)
+	end
+end)
